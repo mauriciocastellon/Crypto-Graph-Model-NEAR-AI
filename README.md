@@ -42,8 +42,3 @@ La **MCP** para las aristas **P-P (Proyecto-a-Proyecto)** se calcula como una co
 
 - **Lenguaje:**  
   `Python`.  
-
-## Licencia
-
-Este proyecto está bajo la Licencia MIT. Ver el archivo `LICENSE` para más detalles.
-
