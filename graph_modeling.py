@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import time
 from pycoingecko import CoinGeckoAPI
 from datetime import datetime, timedelta
-COINGECKO_API_KEY = "CG-RuqSCZYg1dposX2ezNun37g4"
+COINGECKO_API_KEY = "***"
 CG_CLIENT = CoinGeckoAPI(api_key=COINGECKO_API_KEY)
 
 # Parámetros del modelo
