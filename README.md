@@ -41,4 +41,7 @@ La **MCP** para las aristas **P-P (Proyecto-a-Proyecto)** se calcula como una co
   `Plotly` → Generación de un **Force-Directed Layout interactivo** que permite explorar la topología y la fuerza de las aristas ponderadas.  
 
 - **Lenguaje:**  
-  `Python`.  
+  `Python`.
+<img width="1054" height="800" alt="newplot" src="https://github.com/user-attachments/assets/555eca4b-6795-4478-9a45-e45c0f99c2d4" />
+
+   
