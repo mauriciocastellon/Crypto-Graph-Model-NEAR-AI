@@ -1,400 +1,217 @@
-"""
-Crypto Graph Model - NEAR AI
-============================
-
-Este módulo proporciona herramientas para modelar la interdependencia y 
-topología del mercado de criptoactivos usando análisis de grafos.
-
-Autor: Mauricio Castellón
-Fecha: 2024
-"""
-
-import numpy as np
-import pandas as pd
 import networkx as nx
+import pandas as pd
+import random
+import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
+import time
 from pycoingecko import CoinGeckoAPI
-from typing import List, Dict, Tuple, Optional
-import warnings
-warnings.filterwarnings('ignore')
+from datetime import datetime, timedelta
+COINGECKO_API_KEY = "CG-RuqSCZYg1dposX2ezNun37g4"
+CG_CLIENT = CoinGeckoAPI(api_key=COINGECKO_API_KEY)
+
+# Parámetros del modelo
+N_TARGET = 1000 
+N_AI_PROJECTS = 950 
+N_INFRASTRUCTURE = 30 
+N_CEX_HUBS = 20 
+TARGET_COIN_ID = 'near'
+TARGET_COIN_NAME = 'NEAR Protocol'
+
+CEX_TIER_SCORE = {
+    'Binance (Tier 1)': 5, 'Coinbase (Tier 1)': 5, 'Kraken (Tier 2)': 3,
+    'KuCoin (Tier 2)': 3, 'Gate.io (Tier 3)': 1, 'OKX (Tier 1)': 5,
+    'Bybit (Tier 2)': 3, 'Huobi (Tier 3)': 1, 'NEAR Blockchain': 5 
+}
+
+def data_acquisition_pipeline():
+    print("Iniciando la adquisición de datos de 1000+ nodos...")
+
+    simulated_projects = [f'AI Project {i}' for i in range(N_AI_PROJECTS)]
+    simulated_projects.append(TARGET_COIN_NAME)
+
+    data = []
+    for project in simulated_projects:
+        is_near = (project == TARGET_COIN_NAME)
+
+        vol_mc_ratio = random.uniform(0.01, 0.5) if not is_near else random.uniform(0.05, 0.25)
+        trust_score = random.uniform(0.1, 0.9)
+
+        data.append({
+            'project_name': project,
+            'type': 'P',
+            'is_near': is_near,
+            'market_cap': random.randint(100, 5000) * (1000000 if is_near else 1),
+            'vol_24h': random.randint(5, 500) * (1000000 if is_near else 1),
+            'vol_mc_ratio': vol_mc_ratio, 
+            'trust_score_ft': trust_score, 
+            'has_halving': random.choice([True, False]), 
+            'is_multichain': random.choice([True, False]),
+            'price_correlation_base': random.uniform(0.1, 0.9), 
+            'cex_listing': random.sample(list(CEX_TIER_SCORE.keys()), random.randint(1, 3)),
+            'blockchain_explorer': random.choice([f'Explorer {i}' for i in range(N_INFRASTRUCTURE)])
+        })
+
+    infra_nodes = [f'Explorer {i}' for i in range(N_INFRASTRUCTURE)]
+    hub_nodes = list(CEX_TIER_SCORE.keys())
+
+    df = pd.DataFrame(data)
+    print(f"Datos simulados y preprocesados para {len(df)} proyectos de IA.")
+
+    return df, infra_nodes, hub_nodes
 
 
-class CryptoGraphModel:
-    """
-    Clase principal para el modelado de grafos de criptomonedas.
-    
-    Esta clase permite recolectar datos de criptomonedas, construir grafos
-    basados en correlaciones de precios, y visualizar las relaciones entre
-    diferentes activos digitales.
-    """
-    
-    def __init__(self):
-        """Inicializa el modelo de grafo de criptomonedas."""
-        self.cg = CoinGeckoAPI()
-        self.crypto_data = None
-        self.price_data = None
-        self.correlation_matrix = None
-        self.graph = None
-        self.crypto_list = []
-        
-    def load_crypto_data(self, crypto_ids: List[str], vs_currency: str = 'usd', 
-                        days: int = 30) -> pd.DataFrame:
-        """
-        Carga datos históricos de precios para las criptomonedas especificadas.
-        
-        Args:
-            crypto_ids: Lista de IDs de criptomonedas (ej: ['bitcoin', 'ethereum'])
-            vs_currency: Moneda base para los precios (default: 'usd')
-            days: Número de días de datos históricos (default: 30)
-            
-        Returns:
-            DataFrame con datos de precios históricos
-        """
-        print(f"Cargando datos para {len(crypto_ids)} criptomonedas...")
-        
-        price_data = {}
-        
-        for crypto_id in crypto_ids:
-            try:
-                # Obtener datos históricos de precios
-                historical_data = self.cg.get_coin_market_chart_by_id(
-                    id=crypto_id,
-                    vs_currency=vs_currency,
-                    days=days
-                )
-                
-                # Extraer precios y convertir timestamps
-                prices = historical_data['prices']
-                df_temp = pd.DataFrame(prices, columns=['timestamp', 'price'])
-                df_temp['timestamp'] = pd.to_datetime(df_temp['timestamp'], unit='ms')
-                df_temp.set_index('timestamp', inplace=True)
-                
-                price_data[crypto_id] = df_temp['price']
-                print(f"✓ Datos cargados para {crypto_id}")
-                
-            except Exception as e:
-                print(f"✗ Error cargando datos para {crypto_id}: {str(e)}")
-                continue
-        
-        # Combinar todos los datos en un DataFrame
-        if price_data:
-            self.price_data = pd.DataFrame(price_data)
-            self.crypto_list = list(price_data.keys())
-            print(f"✓ Datos cargados exitosamente para {len(self.crypto_list)} criptomonedas")
-            return self.price_data
-        else:
-            raise ValueError("No se pudieron cargar datos para ninguna criptomoneda")
-    
-    def calculate_correlations(self, method: str = 'pearson') -> pd.DataFrame:
-        """
-        Calcula la matriz de correlación entre criptomonedas.
-        
-        Args:
-            method: Método de correlación ('pearson', 'spearman', 'kendall')
-            
-        Returns:
-            Matriz de correlación como DataFrame
-        """
-        if self.price_data is None:
-            raise ValueError("Primero debe cargar los datos con load_crypto_data()")
-        
-        # Calcular retornos logarítmicos
-        returns = np.log(self.price_data / self.price_data.shift(1)).dropna()
-        
-        # Calcular matriz de correlación
-        self.correlation_matrix = returns.corr(method=method)
-        
-        print(f"✓ Matriz de correlación calculada usando método '{method}'")
-        return self.correlation_matrix
-    
-    def build_correlation_graph(self, threshold: float = 0.5, 
-                              correlation_method: str = 'pearson') -> nx.Graph:
-        """
-        Construye un grafo basado en las correlaciones entre criptomonedas.
-        
-        Args:
-            threshold: Umbral mínimo de correlación para crear una arista
-            correlation_method: Método para calcular correlaciones
-            
-        Returns:
-            Grafo NetworkX con las correlaciones
-        """
-        if self.correlation_matrix is None:
-            self.calculate_correlations(method=correlation_method)
-        
-        # Crear grafo no dirigido
-        self.graph = nx.Graph()
-        
-        # Agregar nodos (criptomonedas)
-        for crypto in self.crypto_list:
-            self.graph.add_node(crypto)
-        
-        # Agregar aristas basadas en correlaciones
-        for i, crypto1 in enumerate(self.crypto_list):
-            for j, crypto2 in enumerate(self.crypto_list[i+1:], i+1):
-                correlation = abs(self.correlation_matrix.loc[crypto1, crypto2])
-                
-                if correlation >= threshold:
-                    self.graph.add_edge(
-                        crypto1, 
-                        crypto2, 
-                        weight=correlation,
-                        correlation=self.correlation_matrix.loc[crypto1, crypto2]
-                    )
-        
-        print(f"✓ Grafo construido con {len(self.graph.nodes)} nodos y {len(self.graph.edges)} aristas")
-        print(f"  Umbral de correlación: {threshold}")
-        
-        return self.graph
-    
-    def analyze_graph_metrics(self) -> Dict[str, float]:
-        """
-        Calcula métricas importantes del grafo.
-        
-        Returns:
-            Diccionario con métricas del grafo
-        """
-        if self.graph is None:
-            raise ValueError("Primero debe construir el grafo con build_correlation_graph()")
-        
-        metrics = {
-            'num_nodes': len(self.graph.nodes),
-            'num_edges': len(self.graph.edges),
-            'density': nx.density(self.graph),
-            'avg_clustering': nx.average_clustering(self.graph),
-            'num_connected_components': nx.number_connected_components(self.graph)
-        }
-        
-        # Centralidad solo si el grafo está conectado
-        if nx.is_connected(self.graph):
-            centrality = nx.degree_centrality(self.graph)
-            metrics['most_central_node'] = max(centrality.items(), key=lambda x: x[1])
-            metrics['avg_centrality'] = np.mean(list(centrality.values()))
-        
-        return metrics
-    
-    def visualize_graph(self, layout: str = 'spring', node_size_factor: int = 1000,
-                       show_labels: bool = True, title: str = "Grafo de Correlaciones de Criptomonedas"):
-        """
-        Visualiza el grafo de correlaciones usando Plotly.
-        
-        Args:
-            layout: Tipo de layout ('spring', 'circular', 'kamada_kawai')
-            node_size_factor: Factor de tamaño para los nodos
-            show_labels: Si mostrar etiquetas de los nodos
-            title: Título del gráfico
-        """
-        if self.graph is None:
-            raise ValueError("Primero debe construir el grafo con build_correlation_graph()")
-        
-        # Calcular posiciones de los nodos
-        if layout == 'spring':
-            pos = nx.spring_layout(self.graph, k=1, iterations=50)
-        elif layout == 'circular':
-            pos = nx.circular_layout(self.graph)
-        elif layout == 'kamada_kawai':
-            pos = nx.kamada_kawai_layout(self.graph)
-        else:
-            pos = nx.spring_layout(self.graph)
-        
-        # Extraer coordenadas de nodos
-        node_x = [pos[node][0] for node in self.graph.nodes()]
-        node_y = [pos[node][1] for node in self.graph.nodes()]
-        
-        # Extraer coordenadas de aristas
-        edge_x = []
-        edge_y = []
-        edge_info = []
-        
-        for edge in self.graph.edges(data=True):
-            x0, y0 = pos[edge[0]]
-            x1, y1 = pos[edge[1]]
-            edge_x.extend([x0, x1, None])
-            edge_y.extend([y0, y1, None])
-            edge_info.append(f"{edge[0]} - {edge[1]}: {edge[2]['correlation']:.3f}")
-        
-        # Crear el gráfico
-        fig = go.Figure()
-        
-        # Agregar aristas
-        fig.add_trace(go.Scatter(
-            x=edge_x, y=edge_y,
-            line=dict(width=2, color='lightblue'),
+def calculate_mcp_composite(df_node1, df_node2):
+    """Calcula la Métrica Compuesta de Ponderación (MCP) P-P.[2]"""
+
+    fc = (df_node1['price_correlation_base'] + df_node2['price_correlation_base']) / 2
+    fr = 1 - abs(df_node1['vol_mc_ratio'] - df_node2['vol_mc_ratio'])
+    ft = (df_node1['trust_score_ft'] + df_node2['trust_score_ft']) / 2
+    w_composite = (0.5 * fc) + (0.3 * fr) + (0.2 * ft)
+
+    return w_composite
+
+def calculate_mcp_ph(project_node, hub_name):
+    """Calcula la Métrica Compuesta de Ponderación P-H (Riesgo/Confianza).[2]"""
+    tier_score = CEX_TIER_SCORE.get(hub_name, 1)
+
+    base_weight = project_node['market_cap'] * project_node['vol_mc_ratio']
+    weight = (base_weight * tier_score) / (10**9 * 10) 
+    return min(1.0, max(0.01, weight)) 
+
+def build_network_graph(df, infra_nodes, hub_nodes):
+    """Crea el grafo Multi-Partito (P, I, H) usando NetworkX."""
+    G = nx.Graph()
+    print("Creando Nodos P, I, H...")
+
+    for index, row in df.iterrows():
+        color = '#00BFFF'
+        size = 15
+        if row['is_near']:
+            color = '#FF007F' # NEAR resaltado en rosa
+            size = 25
+
+        G.add_node(row['project_name'],
+                   type='P',
+                   category='AI',
+                   color=color,
+                   size=size,
+                   market_cap=row['market_cap'],
+                   ft_score=row['trust_score_ft'],
+                   label=row['project_name'])
+
+    for node in infra_nodes:
+        G.add_node(node, type='I', category='Infrastructure', color='#FFD700', size=10, label=node)
+
+    for node, score in CEX_TIER_SCORE.items():
+        G.add_node(node, type='H', category=f'CEX Tier {score}', color='#DC143C', size=score * 4, label=node)
+
+    print(f"Total de Nodos creados: {G.number_of_nodes()} (Requisito: >= 1000) [2]")
+
+    print("Calculando Aristas P-P (W_Composite)...")
+    for i in range(len(df)):
+        for j in range(i + 1, len(df)):
+            p1 = df.iloc[i]
+            p2 = df.iloc[j]
+            if random.random() < 0.005:
+                weight = calculate_mcp_composite(p1, p2)
+                G.add_edge(p1['project_name'], p2['project_name'], weight=weight, type='P-P')
+
+    print("Calculando Aristas P-H (W_P-H)...")
+    for index, row in df.iterrows():
+        hubs_to_connect = random.sample(hub_nodes, min(3, len(hub_nodes)))
+        for hub in hubs_to_connect:
+            weight = calculate_mcp_ph(row, hub)
+            G.add_edge(row['project_name'], hub, weight=weight, type='P-H', line_color='#DC143C', line_width=weight * 5)
+
+    print("Agregando Aristas P-I (Dependencia Tecnológica)...")
+    for index, row in df.iterrows():
+        infra_node = row['blockchain_explorer']
+        if infra_node in G.nodes:
+             G.add_edge(row['project_name'], infra_node, weight=1.0, type='P-I', line_color='#FFD700')
+
+    print(f"Total de Aristas creadas: {G.number_of_edges()}")
+    return G
+
+def visualize_graph_plotly(G):
+    """Genera la visualización interactiva de la red usando Plotly.[5]"""
+
+    pos = nx.spring_layout(G, k=0.15, iterations=50, seed=42)
+
+    edge_traces = []
+    for edge in G.edges(data=True):
+        x0, y0 = pos[edge[0]]
+        x1, y1 = pos[edge[1]]
+        weight = edge[2].get('weight', 0.1)
+        line_width = weight * 3
+
+        edge_trace = go.Scatter(
+            x=[x0, x1, None], y=[y0, y1, None],
+            line=dict(width=line_width, color='#888'),
             hoverinfo='none',
-            mode='lines',
-            name='Correlaciones'
-        ))
-        
-        # Agregar nodos
-        node_trace = go.Scatter(
-            x=node_x, y=node_y,
-            mode='markers+text' if show_labels else 'markers',
-            hoverinfo='text',
-            text=list(self.graph.nodes()) if show_labels else None,
-            textposition="middle center",
-            marker=dict(
-                size=[self.graph.degree(node) * node_size_factor/len(self.graph.nodes()) + 10 
-                      for node in self.graph.nodes()],
-                color=[self.graph.degree(node) for node in self.graph.nodes()],
-                colorscale='Viridis',
-                colorbar=dict(title="Grado del Nodo"),
-                line=dict(width=2, color='white')
-            ),
-            name='Criptomonedas'
+            mode='lines'
         )
-        
-        # Agregar información hover para los nodos
-        node_adjacencies = []
-        node_text = []
-        for node in self.graph.nodes():
-            adjacencies = list(self.graph.neighbors(node))
-            node_adjacencies.append(len(adjacencies))
-            node_text.append(f'{node}<br>Conexiones: {len(adjacencies)}')
-        
-        node_trace.hovertext = node_text
-        fig.add_trace(node_trace)
-        
-        # Configurar layout
-        fig.update_layout(
-            title=dict(text=title, x=0.5, font_size=16),
-            showlegend=True,
-            hovermode='closest',
-            margin=dict(b=20,l=5,r=5,t=40),
-            annotations=[
-                dict(
-                    text="Tamaño del nodo proporcional al número de conexiones",
-                    showarrow=False,
-                    xref="paper", yref="paper",
-                    x=0.005, y=-0.002,
-                    xanchor='left', yanchor='bottom',
-                    font=dict(size=12)
-                )
-            ],
-            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            plot_bgcolor='white'
+        edge_traces.append(edge_trace)
+
+    node_x = []
+    node_y = []
+    node_text = []
+    node_sizes = []
+    node_colors = []
+
+    for node in G.nodes(data=True):
+        x, y = pos[node[0]]
+        node_x.append(x)
+        node_y.append(y)
+
+        mc_formatted = f"${node[1].get('market_cap', 0):,.0f}" if node[1]['type'] == 'P' else 'N/A'
+        ft_score_value = node[1].get('ft_score', 'N/A')
+        ft_score_formatted = f"{ft_score_value:.2f}" if isinstance(ft_score_value, (int, float)) else ft_score_value
+
+        node_text.append(
+            f"<b>{node[0]}</b><br>"
+            f"Tipo: {node[1]['type']} ({node[1]['category']})<br>"
+            f"Market Cap: {mc_formatted}<br>"
+            f"F_T (Trust Score): {ft_score_formatted}"
         )
-        
-        fig.show()
-        return fig
-    
-    def visualize_correlation_heatmap(self, title: str = "Matriz de Correlación de Criptomonedas"):
-        """
-        Visualiza la matriz de correlación como un mapa de calor.
-        
-        Args:
-            title: Título del gráfico
-        """
-        if self.correlation_matrix is None:
-            raise ValueError("Primero debe calcular correlaciones con calculate_correlations()")
-        
-        fig = px.imshow(
-            self.correlation_matrix,
-            labels=dict(x="Criptomoneda", y="Criptomoneda", color="Correlación"),
-            x=self.correlation_matrix.columns,
-            y=self.correlation_matrix.index,
-            color_continuous_scale='RdBu_r',
-            title=title
-        )
-        
-        fig.update_layout(
-            title=dict(x=0.5, font_size=16),
-            width=600,
-            height=600
-        )
-        
-        fig.show()
-        return fig
-    
-    def get_top_correlations(self, n: int = 10) -> pd.DataFrame:
-        """
-        Obtiene las correlaciones más altas entre pares de criptomonedas.
-        
-        Args:
-            n: Número de top correlaciones a retornar
-            
-        Returns:
-            DataFrame con las top correlaciones
-        """
-        if self.correlation_matrix is None:
-            raise ValueError("Primero debe calcular correlaciones con calculate_correlations()")
-        
-        # Crear lista de correlaciones
-        correlations = []
-        for i in range(len(self.correlation_matrix.columns)):
-            for j in range(i+1, len(self.correlation_matrix.columns)):
-                crypto1 = self.correlation_matrix.columns[i]
-                crypto2 = self.correlation_matrix.columns[j]
-                corr_value = self.correlation_matrix.iloc[i, j]
-                
-                correlations.append({
-                    'Crypto1': crypto1,
-                    'Crypto2': crypto2,
-                    'Correlation': corr_value,
-                    'Abs_Correlation': abs(corr_value)
-                })
-        
-        # Convertir a DataFrame y ordenar
-        df_correlations = pd.DataFrame(correlations)
-        top_correlations = df_correlations.nlargest(n, 'Abs_Correlation')
-        
-        return top_correlations[['Crypto1', 'Crypto2', 'Correlation']]
+        node_sizes.append(node[1].get('size', 10))
+        node_colors.append(node[1]['color'])
 
+    node_trace = go.Scatter(
+        x=node_x, y=node_y,
+        mode='markers',
+        hoverinfo='text',
+        hovertext=node_text,
+        marker=dict(
+            size=node_sizes,
+            color=node_colors,
+            line=dict(color='#FFFFFF', width=1)),
+        name='')
 
-def main():
-    """
-    Función principal de demostración del uso del CryptoGraphModel.
-    """
-    print("=== Crypto Graph Model - NEAR AI ===")
-    print("Inicializando modelo de grafo de criptomonedas...\n")
-    
-    # Inicializar modelo
-    model = CryptoGraphModel()
-    
-    # Lista de criptomonedas populares para el análisis
-    crypto_list = [
-        'bitcoin',
-        'ethereum', 
-        'cardano',
-        'polkadot',
-        'chainlink',
-        'solana'
-    ]
-    
-    try:
-        # Cargar datos
-        print("1. Cargando datos de criptomonedas...")
-        model.load_crypto_data(crypto_list, days=90)
-        
-        # Construir grafo
-        print("\n2. Construyendo grafo de correlaciones...")
-        model.build_correlation_graph(threshold=0.3)
-        
-        # Analizar métricas
-        print("\n3. Analizando métricas del grafo...")
-        metrics = model.analyze_graph_metrics()
-        
-        print("Métricas del Grafo:")
-        for key, value in metrics.items():
-            print(f"  {key}: {value}")
-        
-        # Visualizar grafo
-        print("\n4. Generando visualizaciones...")
-        model.visualize_graph()
-        model.visualize_correlation_heatmap()
-        
-        # Mostrar top correlaciones
-        print("\n5. Top 5 Correlaciones:")
-        top_corr = model.get_top_correlations(n=5)
-        print(top_corr.to_string(index=False))
-        
-        print("\n✓ Análisis completado exitosamente!")
-        
-    except Exception as e:
-        print(f"✗ Error durante el análisis: {str(e)}")
+    fig = go.Figure(data=edge_traces + [node_trace],
+                layout=go.Layout(
+                    title=f'<br>Modelo de Grafo Multi-Partito (P, I, H) - Enfoque: {TARGET_COIN_NAME} (IA)',
+                    titlefont_size=16,
+                    showlegend=False,
+                    hovermode='closest',
+                    margin=dict(b=20, l=5, r=5, t=40),
+                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                    height=800,
+                    plot_bgcolor='white'
+                    )
+                    )
 
+    return fig
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    df_nodes, infra_nodes_list, hub_nodes_list = data_acquisition_pipeline()
+    G_complex = build_network_graph(df_nodes, infra_nodes_list, hub_nodes_list)
+    fig = visualize_graph_plotly(G_complex)
+
+    print("\nVisualización interactiva generada (ejecute fig.show() en un entorno compatible):")
+    fig.show()
+    print("\n--- Análisis Topológico Básico (NetworkX) ---")
+    near_centrality = nx.degree_centrality(G_complex).get(TARGET_COIN_NAME)
+    print(f"Centralidad de Grado de {TARGET_COIN_NAME}: {near_centrality:.4f}")
+
+  
